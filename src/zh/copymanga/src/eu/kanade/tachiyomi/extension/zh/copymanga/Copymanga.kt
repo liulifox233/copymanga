@@ -63,7 +63,6 @@ class Copymanga : ConfigurableSource, HttpSource() {
         response
     }
 
-
     override val client: OkHttpClient = network.cloudflareClient.newBuilder()
         .addInterceptor(apiInterceptor)
         .rateLimitHost(
@@ -247,7 +246,15 @@ class Copymanga : ConfigurableSource, HttpSource() {
 
         return result.results.chapter.contents.mapIndexed { index, content ->
             val originalUrl = content.url
-            val transformedUrl = originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp")
+            val upscaleEnabled = preferences.getBoolean(UPSCALE_API_ENABLED_PREF, UPSCALE_API_ENABLED_PREF_DEFAULT)
+            val apiTemplate = preferences.getString(UPSCALE_API_URL_PREF, UPSCALE_API_URL_DEFAULT) ?: UPSCALE_API_URL_DEFAULT
+
+            val transformedUrl = if (upscaleEnabled && apiTemplate.contains("{url}")) {
+                apiTemplate.replace("{url}", originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp"))
+            } else {
+                originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp")
+            }
+
             Page(index, imageUrl = transformedUrl, url = transformedUrl, uri = Uri.parse(transformedUrl))
         }
     }
@@ -317,8 +324,44 @@ class Copymanga : ConfigurableSource, HttpSource() {
             }
         }
 
+        val upscaleApiPreference = androidx.preference.SwitchPreferenceCompat(screen.context).apply {
+            key = UPSCALE_API_ENABLED_PREF
+            title = UPSCALE_API_ENABLED_PREF_TITLE
+            summary = UPSCALE_API_ENABLED_PREF_SUMMARY
+            setDefaultValue(UPSCALE_API_ENABLED_PREF_DEFAULT)
+            setOnPreferenceChangeListener { _, _ ->
+                Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
+                true
+            }
+        }
+        val upscaleUrlPreference = androidx.preference.EditTextPreference(screen.context).apply {
+            key = UPSCALE_API_URL_PREF
+            title = UPSCALE_API_URL_TITLE
+            summary = UPSCALE_API_URL_SUMMARY
+            dialogTitle = UPSCALE_API_URL_TITLE
+            setDefaultValue(UPSCALE_API_URL_DEFAULT)
+            setOnPreferenceChangeListener { _, newValue ->
+                val newUrl = newValue as String
+                when {
+                    newUrl.isEmpty() -> {
+                        Toast.makeText(screen.context, "API地址不能为空", Toast.LENGTH_SHORT).show()
+                        false
+                    }
+                    !newUrl.contains("{url}") -> {
+                        Toast.makeText(screen.context, "必须包含{url}参数占位符", Toast.LENGTH_SHORT).show()
+                        false
+                    }
+                    else -> {
+                        Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
+                        true
+                    }
+                }
+            }
+        }
         screen.addPreference(mainSiteRatePermitsPreference)
         screen.addPreference(mainSiteRatePeriodPreference)
+        screen.addPreference(upscaleApiPreference)
+        screen.addPreference(upscaleUrlPreference)
     }
 
     // Data Models
@@ -514,5 +557,15 @@ class Copymanga : ConfigurableSource, HttpSource() {
         private const val MAINSITE_RATEPERIOD_PREF_TITLE = "请求间隔时间"
         private const val MAINSITE_RATEPERIOD_PREF_SUMMARY = "请求之间的最小间隔(毫秒) (需要重启)"
         private val MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY = (500..6000 step 500).map { it.toString() }.toTypedArray()
+
+        private const val UPSCALE_API_ENABLED_PREF = "upscaleApiEnabled"
+        private const val UPSCALE_API_ENABLED_PREF_DEFAULT = false
+        private const val UPSCALE_API_ENABLED_PREF_TITLE = "启用超分辨率"
+        private const val UPSCALE_API_ENABLED_PREF_SUMMARY = "使用upscale-api提升图片清晰度（实验性功能）"
+
+        private const val UPSCALE_API_URL_PREF = "upscaleApiUrlPreference"
+        private const val UPSCALE_API_URL_DEFAULT = "https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}"
+        private const val UPSCALE_API_URL_TITLE = "超分辨率API地址"
+        private const val UPSCALE_API_URL_SUMMARY = "格式: https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}\n必须包含{url}参数占位符"
     }
 }

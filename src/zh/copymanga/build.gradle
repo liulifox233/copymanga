@@ -2,7 +2,7 @@ ext {
     extName = 'Copymanga'
     extClass = '.Copymanga'
     baseUrl = 'https://mangacopy.com'
-    extVersionCode = 0
+    extVersionCode = 1
 }
 
 apply from: "$rootDir/common.gradle"
