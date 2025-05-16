@@ -67,8 +67,10 @@ class Copymanga : ConfigurableSource, HttpSource() {
         .addInterceptor(apiInterceptor)
         .rateLimitHost(
             baseUrl.toHttpUrl(),
-            preferences.getString(MAINSITE_RATEPERMITS_PREF, MAINSITE_RATEPERMITS_PREF_DEFAULT)!!.toInt(),
-            preferences.getString(MAINSITE_RATEPERIOD_PREF, MAINSITE_RATEPERIOD_PREF_DEFAULT)!!.toLong(),
+            preferences.getString(MAINSITE_RATEPERMITS_PREF, MAINSITE_RATEPERMITS_PREF_DEFAULT)!!
+                .toInt(),
+            preferences.getString(MAINSITE_RATEPERIOD_PREF, MAINSITE_RATEPERIOD_PREF_DEFAULT)!!
+                .toLong(),
             TimeUnit.MILLISECONDS,
         )
         .build()
@@ -87,7 +89,8 @@ class Copymanga : ConfigurableSource, HttpSource() {
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val result = json.decodeFromString<ApiResponse<PopularMangaResponse>>(response.body.string())
+        val result =
+            json.decodeFromString<ApiResponse<PopularMangaResponse>>(response.body.string())
         if (result.code != 200 || result.results == null) {
             return MangasPage(emptyList(), hasNextPage = false)
         }
@@ -114,7 +117,8 @@ class Copymanga : ConfigurableSource, HttpSource() {
     }
 
     override fun latestUpdatesParse(response: Response): MangasPage {
-        val result = json.decodeFromString<ApiResponse<LatestUpdatesResponse>>(response.body.string())
+        val result =
+            json.decodeFromString<ApiResponse<LatestUpdatesResponse>>(response.body.string())
         if (result.code != 200 || result.results == null) {
             return MangasPage(emptyList(), hasNextPage = false)
         }
@@ -137,7 +141,10 @@ class Copymanga : ConfigurableSource, HttpSource() {
     // Search
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
         return if (query.isNotBlank()) {
-            GET("$baseUrl/api/v3/search/comic?limit=30&offset=${(page - 1) * 30}&q=$query&platform=4", headers)
+            GET(
+                "$baseUrl/api/v3/search/comic?limit=30&offset=${(page - 1) * 30}&q=$query&platform=4",
+                headers,
+            )
         } else {
             // Handle filters if needed
             popularMangaRequest(page)
@@ -164,7 +171,10 @@ class Copymanga : ConfigurableSource, HttpSource() {
             }
         }
 
-        return MangasPage(mangas, result.results.total > result.results.offset + result.results.limit)
+        return MangasPage(
+            mangas,
+            result.results.total > result.results.offset + result.results.limit,
+        )
     }
 
     // Manga Details
@@ -205,31 +215,51 @@ class Copymanga : ConfigurableSource, HttpSource() {
             throw Exception("请求失败: ${result.message.ifEmpty { "未知错误" }}")
         }
 
-        val group = result.results.groups.values.firstOrNull() ?: return emptyList()
         val pathWord = response.request.url.pathSegments[3]
-
-        val chapterResponse = client.newCall(
-            GET("$baseUrl/api/v3/comic/$pathWord/group/${group.path_word}/chapters?platform=4", headers),
-        ).execute()
-
-        val chapterResult = json.decodeFromString<ApiResponse<PaginationData<ChapterData>>>(chapterResponse.body.string())
-        if (chapterResult.code != 200 || chapterResult.results == null) {
-            throw Exception("请求失败: ${result.message.ifEmpty { "未知错误" }}")
-        }
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
 
-        return chapterResult.results.list.map {
-            SChapter.create().apply {
-                name = it.name
-                chapter_number = it.index.toFloat()
-                date_upload = try {
-                    dateFormat.parse(it.datetime_created)?.time ?: 0L
-                } catch (e: ParseException) {
-                    0L // 解析失败时返回默认值
+        val allChapters = mutableListOf<SChapter>()
+        val defaultGroupPath = result.results.groups.values.firstOrNull()?.path_word ?: "default"
+        var chapterCounter = 0
+
+        result.results.groups.values.forEach { group ->
+            try {
+                val chapterResponse = client.newCall(
+                    GET(
+                        "$baseUrl/api/v3/comic/$pathWord/group/${group.path_word}/chapters?platform=4",
+                        headers,
+                    ),
+                ).execute()
+
+                val chapterResult = json.decodeFromString<ApiResponse<PaginationData<ChapterData>>>(
+                    chapterResponse.body.string(),
+                )
+
+                if (chapterResult.code == 200 && chapterResult.results != null) {
+                    val groupChapters = chapterResult.results.list.map {
+                        SChapter.create().apply {
+                            name = if (group.path_word == defaultGroupPath) {
+                                it.name
+                            } else {
+                                "${group.name}: ${it.name}"
+                            }
+                            chapter_number = chapterCounter++.toFloat()
+                            date_upload = try {
+                                dateFormat.parse(it.datetime_created)?.time ?: 0L
+                            } catch (e: ParseException) {
+                                0L
+                            }
+                            url = "/api/v3/comic/${it.comic_path_word}/chapter2/${it.uuid}"
+                        }
+                    }
+                    allChapters.addAll(groupChapters)
                 }
-                url = "/api/v3/comic/${it.comic_path_word}/chapter2/${it.uuid}"
+            } catch (e: Exception) {
+                println("Error fetching chapters for group ${group.name}: ${e.message}")
             }
-        }.reversed()
+        }
+
+        return allChapters.reversed()
     }
 
     // Page List
@@ -239,23 +269,50 @@ class Copymanga : ConfigurableSource, HttpSource() {
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val result = json.decodeFromString<ApiResponse<ChapterContentResponse>>(response.body.string())
+        val result =
+            json.decodeFromString<ApiResponse<ChapterContentResponse>>(response.body.string())
         if (result.code != 200 || result.results == null) {
             throw Exception("请求失败: ${result.message.ifEmpty { "未知错误" }}")
         }
 
-        return result.results.chapter.contents.mapIndexed { index, content ->
-            val originalUrl = content.url
-            val upscaleEnabled = preferences.getBoolean(UPSCALE_API_ENABLED_PREF, UPSCALE_API_ENABLED_PREF_DEFAULT)
-            val apiTemplate = preferences.getString(UPSCALE_API_URL_PREF, UPSCALE_API_URL_DEFAULT) ?: UPSCALE_API_URL_DEFAULT
+        val chapter = result.results.chapter
+        val contents = chapter.contents
+        val words = chapter.words
 
-            val transformedUrl = if (upscaleEnabled && apiTemplate.contains("{url}")) {
-                apiTemplate.replace("{url}", originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp"))
-            } else {
-                originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp")
-            }
+        val upscaleEnabled =
+            preferences.getBoolean(UPSCALE_API_ENABLED_PREF, UPSCALE_API_ENABLED_PREF_DEFAULT)
+        val apiTemplate = preferences.getString(UPSCALE_API_URL_PREF, UPSCALE_API_URL_DEFAULT)
+            ?: UPSCALE_API_URL_DEFAULT
 
-            Page(index, imageUrl = transformedUrl, url = transformedUrl, uri = Uri.parse(transformedUrl))
+        if (words.isNotEmpty() && contents.size == words.size) {
+            return contents.zip(words)
+                .map { (content, word) ->
+                    word to transformUrl(content.url, upscaleEnabled, apiTemplate)
+                }
+                .sortedBy { it.first }
+                .mapIndexed { index, (_, url) ->
+                    Page(index, imageUrl = url, url = url, uri = Uri.parse(url))
+                }
+        }
+
+        return contents.mapIndexed { index, content ->
+            val url = transformUrl(content.url, upscaleEnabled, apiTemplate)
+            Page(index, imageUrl = url, url = url, uri = Uri.parse(url))
+        }
+    }
+
+    private fun transformUrl(
+        originalUrl: String,
+        upscaleEnabled: Boolean,
+        apiTemplate: String,
+    ): String {
+        return if (upscaleEnabled && apiTemplate.contains("{url}")) {
+            apiTemplate.replace(
+                "{url}",
+                originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp"),
+            )
+        } else {
+            originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp")
         }
     }
 
@@ -284,56 +341,61 @@ class Copymanga : ConfigurableSource, HttpSource() {
 
     // Preferences
     override fun setupPreferenceScreen(screen: androidx.preference.PreferenceScreen) {
-        val mainSiteRatePermitsPreference = androidx.preference.ListPreference(screen.context).apply {
-            key = MAINSITE_RATEPERMITS_PREF
-            title = MAINSITE_RATEPERMITS_PREF_TITLE
-            entries = MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY
-            entryValues = MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY
-            summary = MAINSITE_RATEPERMITS_PREF_SUMMARY
+        val mainSiteRatePermitsPreference =
+            androidx.preference.ListPreference(screen.context).apply {
+                key = MAINSITE_RATEPERMITS_PREF
+                title = MAINSITE_RATEPERMITS_PREF_TITLE
+                entries = MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY
+                entryValues = MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY
+                summary = MAINSITE_RATEPERMITS_PREF_SUMMARY
 
-            setDefaultValue(MAINSITE_RATEPERMITS_PREF_DEFAULT)
-            setOnPreferenceChangeListener { _, newValue ->
-                try {
-                    preferences.edit().putString(MAINSITE_RATEPERMITS_PREF, newValue as String).apply()
-                    Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
-                    true
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    false
+                setDefaultValue(MAINSITE_RATEPERMITS_PREF_DEFAULT)
+                setOnPreferenceChangeListener { _, newValue ->
+                    try {
+                        preferences.edit().putString(MAINSITE_RATEPERMITS_PREF, newValue as String)
+                            .apply()
+                        Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
+                        true
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        false
+                    }
                 }
             }
-        }
 
-        val mainSiteRatePeriodPreference = androidx.preference.ListPreference(screen.context).apply {
-            key = MAINSITE_RATEPERIOD_PREF
-            title = MAINSITE_RATEPERIOD_PREF_TITLE
-            entries = MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY
-            entryValues = MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY
-            summary = MAINSITE_RATEPERIOD_PREF_SUMMARY
+        val mainSiteRatePeriodPreference =
+            androidx.preference.ListPreference(screen.context).apply {
+                key = MAINSITE_RATEPERIOD_PREF
+                title = MAINSITE_RATEPERIOD_PREF_TITLE
+                entries = MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY
+                entryValues = MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY
+                summary = MAINSITE_RATEPERIOD_PREF_SUMMARY
 
-            setDefaultValue(MAINSITE_RATEPERIOD_PREF_DEFAULT)
-            setOnPreferenceChangeListener { _, newValue ->
-                try {
-                    preferences.edit().putString(MAINSITE_RATEPERIOD_PREF, newValue as String).apply()
-                    Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
-                    true
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    false
+                setDefaultValue(MAINSITE_RATEPERIOD_PREF_DEFAULT)
+                setOnPreferenceChangeListener { _, newValue ->
+                    try {
+                        preferences.edit().putString(MAINSITE_RATEPERIOD_PREF, newValue as String)
+                            .apply()
+                        Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
+                        true
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        false
+                    }
                 }
             }
-        }
 
-        val upscaleApiPreference = androidx.preference.SwitchPreferenceCompat(screen.context).apply {
-            key = UPSCALE_API_ENABLED_PREF
-            title = UPSCALE_API_ENABLED_PREF_TITLE
-            summary = UPSCALE_API_ENABLED_PREF_SUMMARY
-            setDefaultValue(UPSCALE_API_ENABLED_PREF_DEFAULT)
-            setOnPreferenceChangeListener { _, _ ->
-                Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
-                true
+        val upscaleApiPreference =
+            androidx.preference.SwitchPreferenceCompat(screen.context).apply {
+                key = UPSCALE_API_ENABLED_PREF
+                title = UPSCALE_API_ENABLED_PREF_TITLE
+                summary = UPSCALE_API_ENABLED_PREF_SUMMARY
+                setDefaultValue(UPSCALE_API_ENABLED_PREF_DEFAULT)
+                setOnPreferenceChangeListener { _, _ ->
+                    Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
+                    true
+                }
             }
-        }
         val upscaleUrlPreference = androidx.preference.EditTextPreference(screen.context).apply {
             key = UPSCALE_API_URL_PREF
             title = UPSCALE_API_URL_TITLE
@@ -347,10 +409,16 @@ class Copymanga : ConfigurableSource, HttpSource() {
                         Toast.makeText(screen.context, "API地址不能为空", Toast.LENGTH_SHORT).show()
                         false
                     }
+
                     !newUrl.contains("{url}") -> {
-                        Toast.makeText(screen.context, "必须包含{url}参数占位符", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            screen.context,
+                            "必须包含{url}参数占位符",
+                            Toast.LENGTH_SHORT,
+                        ).show()
                         false
                     }
+
                     else -> {
                         Toast.makeText(screen.context, TOAST_RESTART, Toast.LENGTH_LONG).show()
                         true
@@ -550,22 +618,27 @@ class Copymanga : ConfigurableSource, HttpSource() {
         private const val MAINSITE_RATEPERMITS_PREF_DEFAULT = "6"
         private const val MAINSITE_RATEPERMITS_PREF_TITLE = "请求速率限制"
         private const val MAINSITE_RATEPERMITS_PREF_SUMMARY = "每分钟最大请求数 (需要重启)"
-        private val MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY = (1..10).map { it.toString() }.toTypedArray()
+        private val MAINSITE_RATEPERMITS_PREF_ENTRIES_ARRAY =
+            (1..10).map { it.toString() }.toTypedArray()
 
         private const val MAINSITE_RATEPERIOD_PREF = "mainSiteRatePeriodMillisPreference"
         private const val MAINSITE_RATEPERIOD_PREF_DEFAULT = "1000"
         private const val MAINSITE_RATEPERIOD_PREF_TITLE = "请求间隔时间"
         private const val MAINSITE_RATEPERIOD_PREF_SUMMARY = "请求之间的最小间隔(毫秒) (需要重启)"
-        private val MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY = (500..6000 step 500).map { it.toString() }.toTypedArray()
+        private val MAINSITE_RATEPERIOD_PREF_ENTRIES_ARRAY =
+            (500..6000 step 500).map { it.toString() }.toTypedArray()
 
         private const val UPSCALE_API_ENABLED_PREF = "upscaleApiEnabled"
         private const val UPSCALE_API_ENABLED_PREF_DEFAULT = false
         private const val UPSCALE_API_ENABLED_PREF_TITLE = "启用超分辨率"
-        private const val UPSCALE_API_ENABLED_PREF_SUMMARY = "使用upscale-api提升图片清晰度（实验性功能）"
+        private const val UPSCALE_API_ENABLED_PREF_SUMMARY =
+            "使用upscale-api提升图片清晰度（实验性功能）"
 
         private const val UPSCALE_API_URL_PREF = "upscaleApiUrlPreference"
-        private const val UPSCALE_API_URL_DEFAULT = "https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}"
+        private const val UPSCALE_API_URL_DEFAULT =
+            "https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}"
         private const val UPSCALE_API_URL_TITLE = "超分辨率API地址"
-        private const val UPSCALE_API_URL_SUMMARY = "格式: https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}\n必须包含{url}参数占位符"
+        private const val UPSCALE_API_URL_SUMMARY =
+            "格式: https://api.example.com/upscale/?model=2x_MangaJaNai_1500p_V1_ESRGAN_90k&format=webp&url={url}\n必须包含{url}参数占位符"
     }
 }
