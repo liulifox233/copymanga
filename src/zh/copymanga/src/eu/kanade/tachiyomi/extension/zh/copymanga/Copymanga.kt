@@ -226,7 +226,7 @@ class Copymanga : ConfigurableSource, HttpSource() {
             try {
                 val chapterResponse = client.newCall(
                     GET(
-                        "$baseUrl/api/v3/comic/$pathWord/group/${group.path_word}/chapters?platform=4",
+                        "$baseUrl/api/v3/comic/$pathWord/group/${group.path_word}/chapters?platform=4&limit=500",
                         headers,
                     ),
                 ).execute()
