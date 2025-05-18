@@ -309,10 +309,10 @@ class Copymanga : ConfigurableSource, HttpSource() {
         return if (upscaleEnabled && apiTemplate.contains("{url}")) {
             apiTemplate.replace(
                 "{url}",
-                originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp"),
+                originalUrl.replace(Regex("\\.c\\d+x\\.[a-zA-Z]+\$"), ".c1500x.webp"),
             )
         } else {
-            originalUrl.replace(Regex("\\.c\\d+x\\.jpg$"), ".c1500x.webp")
+            originalUrl.replace(Regex("\\.c\\d+x\\.[a-zA-Z]+\$"), ".c1500x.webp")
         }
     }
 
